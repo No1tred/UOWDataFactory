@@ -9,16 +9,55 @@ public inherited sharing class FL_UnitOfWork {
     private final Map<FL_SObjectNode, Set<FL_RelationShipPointer>> relationShips;
     @TestVisible
     private final Set<FL_SObjectNode> mixedListOfNodes;
+    private final List<NodeEntry> nodesByInstance;
 
     public FL_UnitOfWork() {
         this.relationShips = new Map<FL_SObjectNode, Set<FL_RelationShipPointer>>();
         this.mixedListOfNodes = new Set<FL_SObjectNode>();
+        this.nodesByInstance = new List<NodeEntry>();
     }
 
-    private void ensureNode(FL_SObjectNode node) {
-        if (node != null) {
-            mixedListOfNodes.add(node);
+    private FL_SObjectNode ensureNode(FL_SObjectNode node) {
+        if (node == null) {
+            return null;
         }
+
+        FL_SObjectNode existingNode = getNodeByInstance(node.instance);
+        if (existingNode != null) {
+            return existingNode;
+        }
+
+        mixedListOfNodes.add(node);
+        nodesByInstance.add(new NodeEntry(node.instance, node));
+        return node;
+    }
+
+    private FL_SObjectNode ensureNode(SObject instance) {
+        if (instance == null) {
+            return null;
+        }
+
+        FL_SObjectNode existingNode = getNodeByInstance(instance);
+        if (existingNode != null) {
+            return existingNode;
+        }
+
+        FL_SObjectNode newNode = new FL_SObjectNode(instance);
+        mixedListOfNodes.add(newNode);
+        nodesByInstance.add(new NodeEntry(instance, newNode));
+        return newNode;
+    }
+
+    private FL_SObjectNode getNodeByInstance(SObject instance) {
+        if (instance == null) {
+            return null;
+        }
+        for (NodeEntry entry : nodesByInstance) {
+            if (entry.instance === instance) {
+                return entry.node;
+            }
+        }
+        return null;
     }
 
     public void registerNode(FL_SObjectNode node) {
@@ -27,14 +66,13 @@ public inherited sharing class FL_UnitOfWork {
 
     // Delegate commonly used operations
     public UnitOfWorkBuilder addSobject(SObject sobjectToAdd) {
-        FL_SObjectNode nodeToAdd = new FL_SObjectNode(sobjectToAdd);
-        registerNode(nodeToAdd);
+        FL_SObjectNode nodeToAdd = ensureNode(sobjectToAdd);
         return new UnitOfWorkBuilder(this, nodeToAdd);
     }
 
     public UnitOfWorkBuilder addSobject(FL_SObjectNode sobjectToAdd) {
-        registerNode(sobjectToAdd);
-        return new UnitOfWorkBuilder(this, sobjectToAdd);
+        FL_SObjectNode nodeToAdd = ensureNode(sobjectToAdd);
+        return new UnitOfWorkBuilder(this, nodeToAdd);
     }
 
     public void addRequiredRelation(FL_SObjectNode source, SObjectField sObjectField, FL_SObjectNode target) {
@@ -50,29 +88,29 @@ public inherited sharing class FL_UnitOfWork {
     }
 
     public void addRequiredRelationWithoutDefault(SObject source, FL_SObjectNode target) {
-        addRelation(new FL_SObjectNode(source), null, target, true);
+        addRelation(ensureNode(source), null, target, true);
     }
 
     public void addRequiredRelationWithoutDefault(FL_SObjectNode source, SObject target) {
-        addRelation(source, null, new FL_SObjectNode(target), true);
+        addRelation(source, null, ensureNode(target), true);
     }
 
     private void addRelation(FL_SObjectNode source, SObjectField sObjectField, FL_SObjectNode target, Boolean isRequired) {
-        if (sObjectField != null && source != null && sObjectField.getDescribe().getSObjectType() != source.getSObjectType()) {
+        FL_SObjectNode sourceNode = ensureNode(source);
+        FL_SObjectNode targetNode = ensureNode(target);
+
+        if (sObjectField != null && sourceNode != null && sObjectField.getDescribe().getSObjectType() != sourceNode.getSObjectType()) {
             throw new IllegalArgumentException(sObjectField + ' is not a field of ' + source.getSObjectType());
         }
 
-        ensureNode(source);
-        ensureNode(target);
-
-        if (!relationShips.containsKey(source)) {
-            relationShips.put(source, new Set<FL_RelationShipPointer>());
+        if (!relationShips.containsKey(sourceNode)) {
+            relationShips.put(sourceNode, new Set<FL_RelationShipPointer>());
         }
-        relationShips.get(source).add(new FL_RelationShipPointer(sObjectField, target, isRequired));
+        relationShips.get(sourceNode).add(new FL_RelationShipPointer(sObjectField, targetNode, isRequired));
     }
 
     public void addOptionalRelation(SObject source, SObject target) {
-        addOptionalRelation(new FL_SObjectNode(source), getDefaultLookupField(source.getSObjectType(), target.getSObjectType()), new FL_SObjectNode(target));
+        addOptionalRelation(ensureNode(source), getDefaultLookupField(source.getSObjectType(), target.getSObjectType()), ensureNode(target));
     }
 
     public void addOptionalRelation(FL_SObjectNode source, FL_SObjectNode target) {
@@ -80,7 +118,7 @@ public inherited sharing class FL_UnitOfWork {
     }
 
     public void addRequiredRelation(SObject source, SObject target) {
-        addRequiredRelation(new FL_SObjectNode(source), getDefaultLookupField(source.getSObjectType(), target.getSObjectType()), new FL_SObjectNode(target));
+        addRequiredRelation(ensureNode(source), getDefaultLookupField(source.getSObjectType(), target.getSObjectType()), ensureNode(target));
     }
 
     public void addRequiredRelation(FL_SObjectNode source, FL_SObjectNode target) {
@@ -171,7 +209,7 @@ public inherited sharing class FL_UnitOfWork {
 
         public UnitOfWorkBuilder(FL_UnitOfWork unitOfWorkInst, FL_SObjectNode baseNode) {
             this.unitOfWorkInst = unitOfWorkInst;
-            this.baseNode = baseNode;
+            this.baseNode = unitOfWorkInst.ensureNode(baseNode);
         }
 
         public FL_SObjectNode baseNode() {
@@ -188,7 +226,7 @@ public inherited sharing class FL_UnitOfWork {
         }
 
         public UnitOfWorkBuilder parentOpt(SObject toSObject) {
-            unitOfWorkInst.addOptionalRelation(this.baseNode, new FL_SObjectNode(toSObject));
+            unitOfWorkInst.addOptionalRelation(this.baseNode, unitOfWorkInst.ensureNode(toSObject));
             return this;
         }
 
@@ -203,7 +241,7 @@ public inherited sharing class FL_UnitOfWork {
         }
 
         public UnitOfWorkBuilder parentOpt(SObjectField sObjField, SObject toSObject) {
-            unitOfWorkInst.addOptionalRelation(this.baseNode, sObjField, new FL_SObjectNode(toSObject));
+            unitOfWorkInst.addOptionalRelation(this.baseNode, sObjField, unitOfWorkInst.ensureNode(toSObject));
             return this;
         }
 
@@ -228,7 +266,7 @@ public inherited sharing class FL_UnitOfWork {
         }
 
         public UnitOfWorkBuilder childOpt(SObjectField sObjField, SObject fromSObject) {
-            unitOfWorkInst.addOptionalRelation(new FL_SObjectNode(fromSObject), sObjField, this.baseNode);
+            unitOfWorkInst.addOptionalRelation(unitOfWorkInst.ensureNode(fromSObject), sObjField, this.baseNode);
             return this;
         }
 
@@ -238,13 +276,13 @@ public inherited sharing class FL_UnitOfWork {
         }
 
         public UnitOfWorkBuilder child(SObject fromSObject) {
-            unitOfWorkInst.addRequiredRelation(new FL_SObjectNode(fromSObject), this.baseNode);
+            unitOfWorkInst.addRequiredRelation(unitOfWorkInst.ensureNode(fromSObject), this.baseNode);
             return this;
         }
 
 
         public UnitOfWorkBuilder childOpt(SObject fromSObject) {
-            unitOfWorkInst.addOptionalRelation(new FL_SObjectNode(fromSObject), this.baseNode);
+            unitOfWorkInst.addOptionalRelation(unitOfWorkInst.ensureNode(fromSObject), this.baseNode);
             return this;
         }
 
@@ -295,7 +333,7 @@ public inherited sharing class FL_UnitOfWork {
         }
 
         public UnitOfWorkBuilder child(SObjectField sObjectField, SObject fromSObject) {
-            unitOfWorkInst.addRequiredRelation(new FL_SObjectNode(fromSObject), sObjectField, this.baseNode);
+            unitOfWorkInst.addRequiredRelation(unitOfWorkInst.ensureNode(fromSObject), sObjectField, this.baseNode);
             return this;
         }
 
@@ -305,7 +343,7 @@ public inherited sharing class FL_UnitOfWork {
         }
 
         public UnitOfWorkBuilder parent(SObject toSObject) {
-            unitOfWorkInst.addRequiredRelation(this.baseNode, new FL_SObjectNode(toSObject));
+            unitOfWorkInst.addRequiredRelation(this.baseNode, unitOfWorkInst.ensureNode(toSObject));
             return this;
         }
 
@@ -325,13 +363,23 @@ public inherited sharing class FL_UnitOfWork {
         }
 
         public UnitOfWorkBuilder parent(SObjectField field, SObject toSObject) {
-            unitOfWorkInst.addRequiredRelation(this.baseNode, field, new FL_SObjectNode(toSObject));
+            unitOfWorkInst.addRequiredRelation(this.baseNode, field, unitOfWorkInst.ensureNode(toSObject));
             return this;
         }
 
         public UnitOfWorkBuilder parent(SObjectField field, FL_SObjectNode toNode) {
             unitOfWorkInst.addRequiredRelation(this.baseNode, field, toNode);
             return this;
+        }
+    }
+
+    private class NodeEntry {
+        public final SObject instance;
+        public final FL_SObjectNode node;
+
+        public NodeEntry(SObject instance, FL_SObjectNode node) {
+            this.instance = instance;
+            this.node = node;
         }
     }
 }

@@ -9,7 +9,6 @@ public with sharing class FL_SObjectNode {
     public final FL_TypeAndOperation typeAndOperation;
     public final Boolean isOptionalLateUpdate;
 
-
     public SObjectType getSObjectType() {
         return instance.getSObjectType();
     }
