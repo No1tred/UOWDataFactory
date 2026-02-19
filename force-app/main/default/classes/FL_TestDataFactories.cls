@@ -1,5 +1,5 @@
 @IsTest
-public with sharing class TestFactories {
+public with sharing class FL_TestDataFactories {
     @IsTest static void testComplexGraphInsertMultiMode() {
         new TaskDataFactory().composeRecords(3);
         Assert.areEqual(3, getCountOfAType(Task.SObjectType));
