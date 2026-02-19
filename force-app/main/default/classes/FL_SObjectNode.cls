@@ -49,7 +49,7 @@ public with sharing class FL_SObjectNode {
         FL_SObjectNode that = (FL_SObjectNode) o;
 
         return System.equals(plannedOperation, that.plannedOperation) &&
-                System.equals(instance, that.instance) &&
+                (instance === that.instance) &&
                 (((instanceId != null) && System.equals(instanceId, that.instanceId)) || ((that.instanceId != null) && System.equals(that.instanceId, instanceId)) || (instanceId == that.instanceId));
     }
 
