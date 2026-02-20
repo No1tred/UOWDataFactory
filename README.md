@@ -12,6 +12,7 @@ The two classes are designed to work together, but each can be used independentl
 - [Core Concepts](#core-concepts)
 - [FL_UnitOfWork](#fl_unitofwork)
 - [FL_DataFactory](#fl_datafactory)
+- [Benchmark: FL vs fflib](#benchmark-fl-vs-fflib)
 - [End-To-End Examples](#end-to-end-examples)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
@@ -292,6 +293,135 @@ sf project deploy start \
   --tests FL_TestDataFactories \
   --target-org MY_ORG \
   --wait 30
+```
+
+## Benchmark: FL vs fflib
+
+### Scope
+
+This benchmark compares:
+
+- `FL_UnitOfWork` (multi/single mode, first iteration and time-limit variant)
+- `fflib_SObjectUnitOfWork` (single-commit and two-phase workaround)
+
+The compared graph is the same business graph used in `FL_UnitOfWorkTest` shape:
+
+- 7 Accounts
+- 6 Contacts
+- 2 Opportunities
+- 15 expected lookups
+
+### Imported and benchmark classes
+
+- `force-app/main/default/classes/fflib_ISObjectUnitOfWork.cls`
+- `force-app/main/default/classes/fflib_SObjectUnitOfWork.cls`
+- `force-app/main/default/classes/FL_UowFrameworkBenchmark.cls`
+- `force-app/main/default/classes/FL_UowFrameworkBenchmarkTest.cls`
+- `force-app/main/default/classes/fflib_SObjectUnitOfWorkCoverageTest.cls`
+- `force-app/main/default/classes/FL_DatabaseWrapperCoverageTest.cls`
+
+### Key functional findings
+
+1. `fflib` single-commit inserts the same object counts but does not fully resolve same-type edges on this graph.
+2. Missing relationships in `fflib` single-commit are same-type lookups (`Account.ParentId`, `Contact.ReportsToId`).
+3. To match FL relationship correctness, `fflib` must run in two phases:
+   - Phase 1: insert records and resolve cross-type lookups.
+   - Phase 2: `registerDirty(...)` updates to set same-type lookups.
+4. `FL_UnitOfWork` can resolve the graph in one flow.
+
+### General comparison: `FL_UnitOfWork` vs `fflib_SObjectUnitOfWork`
+
+| Aspect | `FL_UnitOfWork` | `fflib_SObjectUnitOfWork` |
+|---|---|---|
+| Core model | Explicit graph (`nodes + edges`) | Per-type UoW registries (`new/dirty/delete`) |
+| Relationship definition | Fluent graph builder + direct relation APIs | `registerRelationship(...)` APIs |
+| Same-type lookup handling in one pass | Supported via graph ordering/strategy | Limited on this tested graph; required two-phase workaround |
+| Optional edge semantics | First-class (`required` vs `optional`) | No direct optional-edge graph search concept |
+| Search controls | `firstIterationOnly`, `timeLimitMS` | Not applicable in same way |
+| Execution modes | `MULTI_TYPE`, `SINGLE_TYPE` | Type-order driven commit sequence |
+| Auto default lookup inference | Built-in (`getDefaultLookupField`) | Must provide relationship fields explicitly |
+| Non-DML work integration | Focused on DML graph execution | Includes event publish hooks, email work, custom `IDoWork` |
+| DML extensibility | Via wrapper (`FL_DatabaseWrapper`) | Via `IDML` strategy (`SimpleDML`, `UserModeDML`, custom IDML) |
+| Typical strength | Complex dependency graph solving with minimal extra update phases | Enterprise UoW orchestration with extension points and broad ecosystem adoption |
+
+Practical guidance:
+
+- Prefer `FL_UnitOfWork` when your primary problem is dependency-graph optimization and same-type graph resolution in a single orchestration flow.
+- Prefer `fflib_SObjectUnitOfWork` when you need standardized enterprise-layer integration (events, email/work hooks, pluggable DML modes), and your graph can tolerate or explicitly model multi-phase processing.
+
+### Required-edges comparison
+
+When all FL edges are required, optional-edge exploration is skipped by design (`optionalEdges.isEmpty()` fast-path).  
+So `firstIteration` and `timeLimit` do not change the planned DML sequence; differences are timing noise.
+
+Validated DML metrics:
+
+- `fflib` two-phase: 7 statements, 22 rows
+- `FL` all-required multi: 5 statements, 15 rows
+- `FL` all-required single: 6 statements, 15 rows
+
+### Clean timing metric set
+
+Because CPU counters in this validation harness were not monotonic in all cases, final clean timing used monotonic wall-clock (`DateTime.now().getTime()`), measured from the same scenario start:
+
+- `total`: scenario start to scenario end
+- `first`: scenario start to first DML
+- `after`: `total - first`
+
+Captured comparison:
+
+| Scenario | Total ms | First DML ms | After First DML ms | DML Statements | DML Rows |
+|---|---:|---:|---:|---:|---:|
+| fflib two-phase | 1004 | 4 | 1000 | 7 | 22 |
+| FL all-required multi + firstIteration | 905 | 322 | 583 | 5 | 15 |
+| FL all-required multi + timeLimit=200 | 596 | 26 | 570 | 5 | 15 |
+| FL all-required single + firstIteration | 613 | 94 | 519 | 6 | 15 |
+| FL all-required single + timeLimit=200 | 558 | 55 | 503 | 6 | 15 |
+
+### Hurdles encountered
+
+1. `fflib` needed import into this repo (`fflib_SObjectUnitOfWork` + interface) before testing.
+2. Validation coverage requirements blocked deploy validation until additional coverage tests were added.
+3. Proving parity required explicit snapshot tests:
+   - object counts matched
+   - lookup completeness differed on single-commit `fflib`
+4. `fflib` same-type relationship support required a two-phase strategy to reach FL-equivalent lookup completeness.
+5. Measuring first-DML timing in validate-only mode required custom probe wrappers and explicit capture runs.
+
+### Validation artifacts
+
+Important result files under `artifacts/validation-runs/`:
+
+- `uow_parity_validate.json`
+- `uow_fflib_twophase_compare_validate.json`
+- `uow_clean_wall_capture_fail.json` (capture payload)
+- `uow_clean_wall_validate_final.json` (final green validation)
+
+### Reproducibility and branch
+
+The full benchmark additions are intended to be committed on branch:
+
+- `fflibUWComparision`
+
+To reproduce with the same approach:
+
+```bash
+sf project deploy validate \
+  --metadata ApexClass:FL_DatabaseWrapper \
+  --metadata ApexClass:fflib_ISObjectUnitOfWork \
+  --metadata ApexClass:fflib_SObjectUnitOfWork \
+  --metadata ApexClass:FL_UowFrameworkBenchmark \
+  --metadata ApexClass:FL_UowFrameworkBenchmarkTest \
+  --metadata ApexClass:fflib_SObjectUnitOfWorkCoverageTest \
+  --metadata ApexClass:FL_DatabaseWrapperCoverageTest \
+  --target-org MY_ORG \
+  --test-level RunSpecifiedTests \
+  --tests FL_UowFrameworkBenchmarkTest \
+  --tests fflib_SObjectUnitOfWorkCoverageTest \
+  --tests FL_DatabaseWrapperCoverageTest \
+  --wait 240 \
+  --verbose \
+  --json
 ```
 
 ## Troubleshooting
