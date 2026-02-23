@@ -46,7 +46,7 @@
         //THEN
         assertRecordsAndRelations();
         Assert.areEqual(3, Limits.getDmlStatements());
-        assertNotSmallerThan(5, Limits.getDmlRows() - SAMPLE_UOW.mixedListOfNodes().size());
+        assertNotSmallerThan(6, Limits.getDmlRows() - SAMPLE_UOW.mixedListOfNodes().size());
     }
 
     @IsTest static void testDAGSmallTimeSingleType() {

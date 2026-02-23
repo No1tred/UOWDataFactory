@@ -43,6 +43,16 @@ public inherited sharing abstract class FL_DataFactory {
 		return composeRecords(1, overrideValuesForAll, null, recordTypeId)[0];
 	}
 
+    public FL_SObjectNode composeNode(SObject inSObject) {
+        UowContext context = getOrCreateStaticContext();
+        return composeNode(inSObject, context);
+    }
+
+    public FL_SObjectNode composeNode(SObject inSObject, UowContext context) {
+        SObject composedRecord = composeRecords(1, inSObject, null, null, context)[0];
+        return ensureNode(context, composedRecord);
+    }
+
 	public List<SObject> composeRecords(Integer recordsNumber) {
 		return composeRecords(recordsNumber, null, null, null);
 	}
