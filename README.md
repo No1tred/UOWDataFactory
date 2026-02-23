@@ -147,31 +147,27 @@ public class AccountFactory extends FL_DataFactory {
 - `insertRecords(...)` / `insertRecord(...)`: compose + perform DML immediately.
 - `createRecordWithoutSave(...)`: convenience alias for one composed record.
 
-### Lookup builders DSL
+### Lookup hook API
 
-Override `getDefaultLookupBuilders()` to auto-populate missing lookup values using other factories.
+Override `addLookups(LookupContext lookupContext)` to auto-populate missing lookups for each composed node.
 
 ```apex
-protected override FL_DataFactory.LookupsBuilders getDefaultLookupBuilders() {
-    return FL_DataFactory.lookupsBuilders()
-        .fill(Case.AccountId)
-        .when(Case.Priority).equalTo('High')
-        .with(new EnterpriseAccountFactory(), ParentMode.SAME_PARENT)
-        .fill(Case.AccountId)
-        .elseWith(new SmbAccountFactory())
-        .fill(Case.ContactId)
-        .alwaysWith(new ContactFactory());
+protected override void addLookups(FL_DataFactory.LookupContext lookupContext) {
+    Case contextCase = (Case) lookupContext.record();
+    if (contextCase.Priority == 'High') {
+        lookupContext.addMissingLookup(Case.AccountId, new EnterpriseAccountFactory(), ParentMode.SAME_PARENT);
+    } else {
+        lookupContext.addMissingLookup(Case.AccountId, new SmbAccountFactory());
+    }
+    lookupContext.addMissingLookup(Case.ContactId, new ContactFactory());
 }
 ```
 
-Supported condition operators:
+`LookupContext` helpers:
 
-- `equalTo`
-- `biggerThan`
-- `lessThan`
-- `biggerOrEqualsThan`
-- `lessOrEqualsThan`
-- unconditional `alwaysWith`
+- `addMissingLookup(...)`: adds **required** relation when field is currently empty
+- `addMissingOptionalLookup(...)`: adds optional relation when field is currently empty
+- `addMissingRequiredLookup(...)`: explicit required relation when field is currently empty
 
 ### ParentMode behavior
 
@@ -239,13 +235,13 @@ public class OpportunityFactory extends FL_DataFactory {
         return o;
     }
 
-    protected override FL_DataFactory.LookupsBuilders getDefaultLookupBuilders() {
-        return FL_DataFactory.lookupsBuilders()
-            .fill(Opportunity.AccountId)
-            .when(Opportunity.Amount).biggerThan(100000)
-            .with(new EnterpriseAccountFactory(), ParentMode.SAME_PARENT)
-            .fill(Opportunity.AccountId)
-            .elseWith(new SmbAccountFactory());
+    protected override void addLookups(FL_DataFactory.LookupContext lookupContext) {
+        Opportunity o = (Opportunity) lookupContext.record();
+        if (o.Amount > 100000) {
+            lookupContext.addMissingLookup(Opportunity.AccountId, new EnterpriseAccountFactory(), ParentMode.SAME_PARENT);
+        } else {
+            lookupContext.addMissingLookup(Opportunity.AccountId, new SmbAccountFactory());
+        }
     }
 }
 ```

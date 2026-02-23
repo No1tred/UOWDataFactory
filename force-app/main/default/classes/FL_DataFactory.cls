@@ -1,4 +1,3 @@
-@SuppressWarnings('PMD.CognitiveComplexity,PMD.CyclomaticComplexity')
 public inherited sharing abstract class FL_DataFactory {
 	private static final Map<SObjectType, Integer> COUNT_MAP = new Map<SObjectType, Integer>();
     @TestVisible
@@ -73,7 +72,9 @@ public inherited sharing abstract class FL_DataFactory {
 				ensureNode(context, sObjectRecord);
 			}
 			COUNT_MAP.put(getSobjectType(), initialCounter + recordsNumber);
-			adjustMissingLookups(sObjectRecords, context);
+            for (SObject loopRecord : sObjectRecords) {
+                addLookups(new LookupContext(context, ensureNode(context, loopRecord)));
+            }
 		} else {
 			throw new IllegalArgumentException('Record number and override object list size are not equal, or wrong object type!');
 		}
@@ -141,88 +142,120 @@ public inherited sharing abstract class FL_DataFactory {
 		return tempMap;
 	}
 
-	private void adjustMissingLookups(List<SObject> sObjectRecords, UowContext context) {
-		LookupsBuilders lookupBuildersContainer = getDefaultLookupBuilders();
-		Map<Schema.SObjectField, LookupBuilder> lookupBuilders = lookupBuildersContainer == null ? new Map<Schema.SObjectField, LookupBuilder>() : lookupBuildersContainer.build();
-		if (lookupBuilders.isEmpty()) {
-			return;
-		}
+    protected virtual void addLookups(LookupContext lookupContext) {
+    }
 
-		Map<LookupAssignment, List<SObject>> missingRecordsMap = new Map<LookupAssignment, List<SObject>>();
-		for (SObject sObjectItem : sObjectRecords) {
-			for (Schema.SObjectField lookupField : lookupBuilders.keySet()) {
-				if (sObjectItem.get(lookupField.getDescribe().getName()) != null) {
-					continue;
-				}
-				LookupWrapper wrapper = resolveLookupWrapper(lookupField, sObjectItem, lookupBuilders);
-				if (wrapper == null || wrapper.dataFactory == null) {
-					continue;
-				}
-				LookupAssignment assignment = new LookupAssignment(lookupField, wrapper);
-				if (!missingRecordsMap.containsKey(assignment)) {
-					missingRecordsMap.put(assignment, new List<SObject>());
-				}
-				missingRecordsMap.get(assignment).add(sObjectItem);
-			}
-		}
+    public class LookupContext {
+        private final UowContext uowContext;
+        private final FL_SObjectNode currentNode;
 
-		assignRelationshipsToObjects(missingRecordsMap, context);
-	}
+        private LookupContext(UowContext uowContext, FL_SObjectNode currentNode) {
+            this.uowContext = uowContext;
+            this.currentNode = currentNode;
+        }
 
-	private void assignRelationshipsToObjects(Map<LookupAssignment, List<SObject>> missingRecordsMap, UowContext context) {
-		for (LookupAssignment assignment : missingRecordsMap.keySet()) {
-			LookupWrapper wrapper = assignment.wrapper;
-			Schema.SObjectField lookupField = assignment.lookupField;
-			List<SObject> recordsMissingLookup = missingRecordsMap.get(assignment);
-			if (recordsMissingLookup.isEmpty()) {
-				continue;
-			}
-			if (wrapper.parentMode == ParentMode.SAME_PARENT) {
-				FL_SObjectNode parentNode = context.parentNodesByFactory.get(wrapper.dataFactory);
-				if (parentNode == null) {
-					SObject parentObject = wrapper.dataFactory.composeRecords(1, null, null, null, context)[0];
-					parentNode = ensureNode(context, parentObject);
-					context.parentNodesByFactory.put(wrapper.dataFactory, parentNode);
-				}
-				if (fieldCompatibleWithObject(lookupField, parentNode.getSObjectType())) {
-					for (SObject childRecord : recordsMissingLookup) {
-						FL_SObjectNode childNode = ensureNode(context, childRecord);
-						addRelation(context, childNode, lookupField, parentNode);
-					}
-				}
-			} else {
-				List<SObject> parentObjectList = wrapper.dataFactory.composeRecords(recordsMissingLookup.size(), null, null, null, context);
-				if (fieldCompatibleWithObject(lookupField, getSobjectType(parentObjectList[0]))) {
-					for (Integer i = 0; i < recordsMissingLookup.size(); i++) {
-						FL_SObjectNode parentNode = ensureNode(context, parentObjectList[i]);
-						FL_SObjectNode childNode = ensureNode(context, recordsMissingLookup[i]);
-						addRelation(context, childNode, lookupField, parentNode);
-					}
-				}
-			}
-		}
-	}
+        public FL_SObjectNode node() {
+            return currentNode;
+        }
 
-	private Boolean fieldCompatibleWithObject(Schema.SObjectField fieldName, SObjectType parentObjectRecord) {
-		List<SObjectType> referencedToTypes = fieldName.getDescribe().getReferenceTo();
-		return referencedToTypes?.contains(parentObjectRecord) == true;
-	}
+        public SObject record() {
+            return currentNode?.instance;
+        }
 
-	protected virtual LookupsBuilders getDefaultLookupBuilders() {
-		return lookupsBuilders();
-	}
+        public void addMissingRequiredLookup(Schema.SObjectField lookupField, FL_SObjectNode parentNode) {
+            if (!isLookupMissing(lookupField)) {
+                return;
+            }
+            uowContext.uow.addRequiredRelation(currentNode, lookupField, parentNode);
+        }
 
-	private LookupWrapper resolveLookupWrapper(
-		Schema.SObjectField lookupField,
-		SObject record,
-		Map<Schema.SObjectField, LookupBuilder> lookupBuilders
-	) {
-		LookupBuilder builder = lookupBuilders.get(lookupField);
-		if (builder != null) {
-			return builder.resolve(record);
-		}
-		return null;
-	}
+        public void addMissingRequiredLookup(Schema.SObjectField lookupField, SObject parentRecord) {
+            if (!isLookupMissing(lookupField)) {
+                return;
+            }
+            FL_SObjectNode parentNode = ensureNodeLocal(parentRecord);
+            uowContext.uow.addRequiredRelation(currentNode, lookupField, parentNode);
+        }
+
+        public void addMissingOptionalLookup(Schema.SObjectField lookupField, FL_SObjectNode parentNode) {
+            if (!isLookupMissing(lookupField)) {
+                return;
+            }
+            uowContext.uow.addOptionalRelation(currentNode, lookupField, parentNode);
+        }
+
+        public void addMissingOptionalLookup(Schema.SObjectField lookupField, SObject parentRecord) {
+            if (!isLookupMissing(lookupField)) {
+                return;
+            }
+            FL_SObjectNode parentNode = ensureNodeLocal(parentRecord);
+            uowContext.uow.addOptionalRelation(currentNode, lookupField, parentNode);
+        }
+
+        public void addMissingLookup(Schema.SObjectField lookupField, FL_SObjectNode parentNode) {
+            if (!isLookupMissing(lookupField)) {
+                return;
+            }
+            uowContext.uow.addRequiredRelation(currentNode, lookupField, parentNode);
+        }
+
+        public void addMissingLookup(Schema.SObjectField lookupField, SObject parentRecord) {
+            if (!isLookupMissing(lookupField)) {
+                return;
+            }
+            FL_SObjectNode parentNode = ensureNodeLocal(parentRecord);
+            uowContext.uow.addRequiredRelation(currentNode, lookupField, parentNode);
+        }
+
+        public void addMissingLookup(Schema.SObjectField lookupField, FL_DataFactory dataFactory) {
+            addMissingLookup(lookupField, dataFactory, ParentMode.DIFFERENT_PARENT);
+        }
+
+        public void addMissingLookup(Schema.SObjectField lookupField, FL_DataFactory dataFactory, ParentMode parentMode) {
+            if (!isLookupMissing(lookupField)) {
+                return;
+            }
+
+            FL_SObjectNode parentNode;
+            if (parentMode == FL_DataFactory.ParentMode.SAME_PARENT) {
+                parentNode = uowContext.parentNodesByFactory.get(dataFactory);
+                if (parentNode == null) {
+                    SObject parentObject = dataFactory.composeRecords(1, null, null, null, uowContext)[0];
+                    parentNode = ensureNodeLocal(parentObject);
+                    uowContext.parentNodesByFactory.put(dataFactory, parentNode);
+                }
+            } else {
+                SObject parentObject = dataFactory.composeRecords(1, null, null, null, uowContext)[0];
+                parentNode = ensureNodeLocal(parentObject);
+            }
+
+            if (isFieldCompatibleWithNode(lookupField, parentNode)) {
+                uowContext.uow.addRequiredRelation(currentNode, lookupField, parentNode);
+            }
+        }
+
+        private Boolean isFieldCompatibleWithNode(Schema.SObjectField lookupField, FL_SObjectNode parentNode) {
+            List<SObjectType> referencedToTypes = lookupField.getDescribe().getReferenceTo();
+            return referencedToTypes?.contains(parentNode.getSObjectType()) == true;
+        }
+
+        private FL_SObjectNode ensureNodeLocal(SObject recordToEnsure) {
+            for (NodeEntry entry : uowContext.nodesByInstance) {
+                if (entry.instance === recordToEnsure) {
+                    return entry.node;
+                }
+            }
+
+            FL_SObjectNode node = new FL_SObjectNode(recordToEnsure);
+            uowContext.nodesByInstance.add(new NodeEntry(recordToEnsure, node));
+            uowContext.uow.registerNode(node);
+            return node;
+        }
+
+        private Boolean isLookupMissing(Schema.SObjectField lookupField) {
+            return record() != null && record().get(lookupField.getDescribe().getName()) == null;
+        }
+    }
 
 	private FL_SObjectNode ensureNode(UowContext context, SObject record) {
 		for (NodeEntry entry : context.nodesByInstance) {
@@ -235,206 +268,6 @@ public inherited sharing abstract class FL_DataFactory {
 		context.nodesByInstance.add(new NodeEntry(record, node));
 		context.uow.registerNode(node);
 		return node;
-	}
-
-	private void addRelation(UowContext context, FL_SObjectNode source, Schema.SObjectField lookupField, FL_SObjectNode target) {
-		if (isRequiredLookup(lookupField)) {
-			context.uow.addRequiredRelation(source, lookupField, target);
-		} else {
-			context.uow.addOptionalRelation(source, lookupField, target);
-		}
-	}
-
-	private Boolean isRequiredLookup(Schema.SObjectField lookupField) {
-		DescribeFieldResult describe = lookupField.getDescribe();
-		return describe.isNillable() == false;
-	}
-
-	public class LookupWrapper {
-		public FL_DataFactory dataFactory;
-		public ParentMode parentMode;
-		public LookupWrapper(FL_DataFactory dataFactory, ParentMode parentMode) {
-			this.dataFactory = dataFactory;
-			this.parentMode = parentMode;
-		}
-	}
-
-	public class LookupBuilder {
-		private List<LookupCondition> conditions = new List<LookupCondition>();
-		private LookupWrapper elseWrapper;
-		private Boolean hasExplicitElse;
-
-		public LookupBuilder always(FL_DataFactory dataFactory, ParentMode parentMode) {
-			conditions.add(new LookupCondition(ConditionType.ALWAYS, null, null, new LookupWrapper(dataFactory, parentMode)));
-			return this;
-		}
-
-		public LookupBuilder equals(SObjectField field, Object value, FL_DataFactory dataFactory, ParentMode parentMode) {
-			conditions.add(new LookupCondition(ConditionType.EQUALS, field, value, new LookupWrapper(dataFactory, parentMode)));
-			return this;
-		}
-
-		public LookupBuilder biggerThan(SObjectField field, Object value, FL_DataFactory dataFactory, ParentMode parentMode) {
-			conditions.add(new LookupCondition(ConditionType.GREATER_THAN, field, value, new LookupWrapper(dataFactory, parentMode)));
-			return this;
-		}
-
-		public LookupBuilder lessThan(SObjectField field, Object value, FL_DataFactory dataFactory, ParentMode parentMode) {
-			conditions.add(new LookupCondition(ConditionType.LESS_THAN, field, value, new LookupWrapper(dataFactory, parentMode)));
-			return this;
-		}
-
-		public LookupBuilder biggerOrEqualsThan(SObjectField field, Object value, FL_DataFactory dataFactory, ParentMode parentMode) {
-			conditions.add(new LookupCondition(ConditionType.GREATER_OR_EQUALS, field, value, new LookupWrapper(dataFactory, parentMode)));
-			return this;
-		}
-
-		public LookupBuilder lessOrEqualsThan(SObjectField field, Object value, FL_DataFactory dataFactory, ParentMode parentMode) {
-			conditions.add(new LookupCondition(ConditionType.LESS_OR_EQUALS, field, value, new LookupWrapper(dataFactory, parentMode)));
-			return this;
-		}
-
-		public LookupBuilder elseWith(FL_DataFactory dataFactory, ParentMode parentMode) {
-			this.elseWrapper = new LookupWrapper(dataFactory, parentMode);
-			this.hasExplicitElse = true;
-			return this;
-		}
-
-		public LookupWrapper resolve(SObject record) {
-			for (LookupCondition condition : conditions) {
-				if (condition.matches(record)) {
-					return condition.wrapper;
-				}
-			}
-			return elseWrapper;
-		}
-
-		public Boolean hasElse() {
-			return hasExplicitElse;
-		}
-	}
-
-	public class LookupsBuilders {
-		private final Map<Schema.SObjectField, LookupBuilder> buildersByField;
-
-		public LookupsBuilders() {
-			this.buildersByField = new Map<Schema.SObjectField, LookupBuilder>();
-		}
-
-		public LookupFieldBuilder fill(Schema.SObjectField lookupField) {
-			LookupBuilder builder = buildersByField.get(lookupField);
-			if (builder == null) {
-				builder = new LookupBuilder();
-				buildersByField.put(lookupField, builder);
-			}
-			return new LookupFieldBuilder(this, lookupField, builder);
-		}
-
-		public Map<Schema.SObjectField, LookupBuilder> build() {
-			for (Schema.SObjectField lookupField : new List<Schema.SObjectField>(buildersByField.keySet())) {
-				LookupBuilder builder = buildersByField.get(lookupField);
-				if (builder != null && builder.hasElse() == false) {
-					builder.elseWith(null, ParentMode.DIFFERENT_PARENT);
-				}
-			}
-			return buildersByField;
-		}
-
-	}
-
-	public class LookupFieldBuilder {
-		private final LookupsBuilders parent;
-		private final Schema.SObjectField lookupField;
-		private final LookupBuilder builder;
-
-		public LookupFieldBuilder(LookupsBuilders parent, Schema.SObjectField lookupField, LookupBuilder builder) {
-			this.parent = parent;
-			this.lookupField = lookupField;
-			this.builder = builder;
-		}
-
-		public LookupsBuilders alwaysWith(FL_DataFactory dataFactory) {
-			return alwaysWith(dataFactory, ParentMode.DIFFERENT_PARENT);
-		}
-
-		public LookupsBuilders alwaysWith(FL_DataFactory dataFactory, ParentMode parentMode) {
-			builder.always(dataFactory, parentMode);
-			return parent;
-		}
-
-		public LookupConditionFieldBuilder when(SObjectField field) {
-			return new LookupConditionFieldBuilder(parent, builder, field);
-		}
-
-		public LookupsBuilders elseWith(FL_DataFactory dataFactory) {
-			return elseWith(dataFactory, ParentMode.DIFFERENT_PARENT);
-		}
-
-		public LookupsBuilders elseWith(FL_DataFactory dataFactory, ParentMode parentMode) {
-			builder.elseWith(dataFactory, parentMode);
-			return parent;
-		}
-	}
-
-	public class LookupConditionFieldBuilder {
-		private final LookupsBuilders parent;
-		private final LookupBuilder builder;
-		private final SObjectField field;
-
-		public LookupConditionFieldBuilder(LookupsBuilders parent, LookupBuilder builder, SObjectField field) {
-			this.parent = parent;
-			this.builder = builder;
-			this.field = field;
-		}
-
-		public LookupConditionValueBuilder equalTo(Object value) {
-			return new LookupConditionValueBuilder(parent, builder, field, ConditionType.EQUALS, value);
-		}
-
-		public LookupConditionValueBuilder biggerThan(Object value) {
-			return new LookupConditionValueBuilder(parent, builder, field, ConditionType.GREATER_THAN, value);
-		}
-
-		public LookupConditionValueBuilder lessThan(Object value) {
-			return new LookupConditionValueBuilder(parent, builder, field, ConditionType.LESS_THAN, value);
-		}
-
-		public LookupConditionValueBuilder biggerOrEqualsThan(Object value) {
-			return new LookupConditionValueBuilder(parent, builder, field, ConditionType.GREATER_OR_EQUALS, value);
-		}
-
-		public LookupConditionValueBuilder lessOrEqualsThan(Object value) {
-			return new LookupConditionValueBuilder(parent, builder, field, ConditionType.LESS_OR_EQUALS, value);
-		}
-	}
-
-	public class LookupConditionValueBuilder {
-		private final LookupsBuilders parent;
-		private final LookupBuilder builder;
-		private final SObjectField field;
-		private final ConditionType conditionType;
-		private final Object value;
-
-		public LookupConditionValueBuilder(LookupsBuilders parent, LookupBuilder builder, SObjectField field, ConditionType conditionType, Object value) {
-			this.parent = parent;
-			this.builder = builder;
-			this.field = field;
-			this.conditionType = conditionType;
-			this.value = value;
-		}
-
-		public LookupsBuilders with(FL_DataFactory dataFactory) {
-			return with(dataFactory, ParentMode.DIFFERENT_PARENT);
-		}
-
-		public LookupsBuilders with(FL_DataFactory dataFactory, ParentMode parentMode) {
-			builder.conditions.add(new LookupCondition(conditionType, field, value, new LookupWrapper(dataFactory, parentMode)));
-			return parent;
-		}
-	}
-
-	public static LookupsBuilders lookupsBuilders() {
-		return new LookupsBuilders();
 	}
 
 	public static UowContext newUowContext(FL_UnitOfWork uow) {
@@ -462,164 +295,6 @@ public inherited sharing abstract class FL_DataFactory {
 		}
 	}
 
-	public enum ConditionType {
-		ALWAYS,
-		EQUALS,
-		GREATER_THAN,
-		LESS_THAN,
-		GREATER_OR_EQUALS,
-		LESS_OR_EQUALS
-	}
-
-	private class LookupCondition {
-		public final ConditionType inConditionType;
-		public final SObjectField field;
-		public final Object value;
-		public final LookupWrapper wrapper;
-
-		public LookupCondition(ConditionType inConditionType, SObjectField field, Object value, LookupWrapper wrapper) {
-			this.inConditionType = inConditionType;
-			this.field = field;
-			this.value = value;
-			this.wrapper = wrapper;
-		}
-
-		public Boolean matches(SObject record) {
-			if (inConditionType == ConditionType.ALWAYS) {
-				return true;
-			}
-			if (field == null || record == null) {
-				return false;
-			}
-			Object recordValue = record.get(field.getDescribe().getName());
-			if (inConditionType == ConditionType.EQUALS) {
-				return System.equals(recordValue, value);
-			}
-			Integer compareResult = compareValues(recordValue, value);
-			if (compareResult == null) {
-				return false;
-			}
-			if (inConditionType == ConditionType.GREATER_THAN) {
-				return compareResult > 0;
-			}
-			if (inConditionType == ConditionType.LESS_THAN) {
-				return compareResult < 0;
-			}
-			if (inConditionType == ConditionType.GREATER_OR_EQUALS) {
-				return compareResult >= 0;
-			}
-			if (inConditionType == ConditionType.LESS_OR_EQUALS) {
-				return compareResult <= 0;
-			}
-			return false;
-		}
-	}
-
-	private static Integer compareValues(Object left, Object right) {
-		if (left == null || right == null) {
-			return null;
-		}
-		if (isNumeric(left) && isNumeric(right)) {
-			Decimal leftNum = toDecimal(left);
-			Decimal rightNum = toDecimal(right);
-			return compareUsingOperators(leftNum, rightNum);
-		}
-		if (left instanceof Date && right instanceof Date) {
-			return compareUsingOperators((Date) left, (Date) right);
-		}
-		if (left instanceof Datetime && right instanceof Datetime) {
-			return compareUsingOperators((Datetime) left, (Datetime) right);
-		}
-		if (left instanceof Time && right instanceof Time) {
-			return compareUsingOperators((Time) left, (Time) right);
-		}
-		if (left instanceof String && right instanceof String) {
-			return ((String) left).compareTo((String) right);
-		}
-		if (left instanceof Id && right instanceof Id) {
-			return String.valueOf(left).compareTo(String.valueOf(right));
-		}
-		return null;
-	}
-
-	private static Boolean isNumeric(Object value) {
-		return value instanceof Decimal || value instanceof Integer || value instanceof Long || value instanceof Double;
-	}
-
-	private static Decimal toDecimal(Object value) {
-		if (value instanceof Decimal) {
-			return (Decimal) value;
-		}
-		if (value instanceof Integer) {
-			return Decimal.valueOf((Integer) value);
-		}
-		if (value instanceof Long) {
-			return Decimal.valueOf((Long) value);
-		}
-		if (value instanceof Double) {
-			return Decimal.valueOf((Double) value);
-		}
-		return null;
-	}
-
-	private static Integer compareUsingOperators(Decimal left, Decimal right) {
-		if (left == right) {
-			return 0;
-		}
-		return left > right ? 1 : -1;
-	}
-
-	private static Integer compareUsingOperators(Date left, Date right) {
-		if (left == right) {
-			return 0;
-		}
-		return left > right ? 1 : -1;
-	}
-
-	private static Integer compareUsingOperators(Datetime left, Datetime right) {
-		if (left == right) {
-			return 0;
-		}
-		return left > right ? 1 : -1;
-	}
-
-	private static Integer compareUsingOperators(Time left, Time right) {
-		if (left == right) {
-			return 0;
-		}
-		return left > right ? 1 : -1;
-	}
-
-	private class LookupAssignment {
-		public final Schema.SObjectField lookupField;
-		public final LookupWrapper wrapper;
-
-		public LookupAssignment(Schema.SObjectField lookupField, LookupWrapper wrapper) {
-			this.lookupField = lookupField;
-			this.wrapper = wrapper;
-		}
-
-		public Boolean equals(Object obj) {
-			if (this === obj) {
-				return true;
-			}
-			if (!(obj instanceof LookupAssignment)) {
-				return false;
-			}
-			LookupAssignment other = (LookupAssignment) obj;
-			return System.equals(lookupField, other.lookupField)
-				&& System.equals(wrapper?.dataFactory, other.wrapper?.dataFactory)
-				&& System.equals(wrapper?.parentMode, other.wrapper?.parentMode);
-		}
-
-		public override Integer hashCode() {
-			Integer hash = 17;
-			hash = 31 * hash + System.hashCode(lookupField);
-			hash = 31 * hash + System.hashCode(wrapper?.dataFactory);
-			hash = 31 * hash + System.hashCode(wrapper?.parentMode);
-			return hash;
-		}
-	}
 
 	public enum ParentMode {
 		SAME_PARENT,

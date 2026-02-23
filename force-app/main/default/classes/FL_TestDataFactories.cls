@@ -156,6 +156,9 @@ public with sharing class FL_TestDataFactories {
     }
 
     private class OpportunityDataFactory extends FL_DataFactory {
+        private final EnterpriseAccountDataFactory enterpriseAccountFactory = new EnterpriseAccountDataFactory();
+        private final SmbAccountDataFactory smbAccountFactory = new SmbAccountDataFactory();
+
         protected override SObject getDefaultRecord(Integer index, Id recordTypeId) {
             Opportunity oppRecord = new Opportunity();
             oppRecord.Name = 'Opp ' + index;
@@ -168,17 +171,21 @@ public with sharing class FL_TestDataFactories {
             return oppRecord;
         }
 
-        protected override FL_DataFactory.LookupsBuilders getDefaultLookupBuilders() {
-            return FL_DataFactory.lookupsBuilders()
-                    .fill(Opportunity.AccountId)
-                    .when(Opportunity.Amount).biggerThan(100000)
-                    .with(new EnterpriseAccountDataFactory(), ParentMode.SAME_PARENT)
-                    .fill(Opportunity.AccountId)
-                    .elseWith(new SmbAccountDataFactory());
+        protected override void addLookups(FL_DataFactory.LookupContext lookupContext) {
+            Opportunity oppRecord = (Opportunity) lookupContext.record();
+            if (oppRecord.Amount > 100000) {
+                lookupContext.addMissingLookup(Opportunity.AccountId, enterpriseAccountFactory, ParentMode.SAME_PARENT);
+            } else {
+                lookupContext.addMissingLookup(Opportunity.AccountId, smbAccountFactory);
+            }
         }
     }
 
     private class CaseDataFactory extends FL_DataFactory {
+        private final EnterpriseAccountDataFactory enterpriseAccountFactory = new EnterpriseAccountDataFactory();
+        private final SmbAccountDataFactory smbAccountFactory = new SmbAccountDataFactory();
+        private final ContactDataFactory2 contactDataFactory = new ContactDataFactory2();
+
         protected override SObject getDefaultRecord(Integer index, Id recordTypeId) {
             Case caseRecord = new Case();
             caseRecord.Subject = 'Case ' + index;
@@ -191,15 +198,19 @@ public with sharing class FL_TestDataFactories {
             return caseRecord;
         }
 
-        protected override FL_DataFactory.LookupsBuilders getDefaultLookupBuilders() {
-            return FL_DataFactory.lookupsBuilders()
-                    .fill(Case.AccountId)
-                    .when(Case.Priority).equalTo('High')
-                    .with(new EnterpriseAccountDataFactory(), ParentMode.SAME_PARENT)
-                    .fill(Case.AccountId)
-                    .elseWith(new SmbAccountDataFactory())
-                    .fill(Case.ContactId)
-                    .alwaysWith(new ContactDataFactory2());
+        protected override void addLookups(FL_DataFactory.LookupContext lookupContext) {
+            Case caseRecord = (Case) lookupContext.record();
+
+
+            if (caseRecord.Priority == 'High') {
+                lookupContext.addMissingLookup(Case.AccountId, enterpriseAccountFactory, ParentMode.SAME_PARENT);
+            } else {
+                lookupContext.addMissingLookup(Case.AccountId, smbAccountFactory);
+            }
+
+
+            lookupContext.addMissingLookup(Case.ContactId, contactDataFactory);
+
         }
     }
 
@@ -217,6 +228,10 @@ public with sharing class FL_TestDataFactories {
     }
 
     private class TaskDataFactory extends FL_DataFactory {
+        private final CaseDataFactory caseDataFactory = new CaseDataFactory();
+        private final OpportunityDataFactory opportunityDataFactory = new OpportunityDataFactory();
+        private final ContactDataFactory2 contactDataFactory = new ContactDataFactory2();
+
         protected override SObject getDefaultRecord(Integer index, Id recordTypeId) {
             Task taskRecord = new Task();
             taskRecord.Subject = (Math.mod(index, 2) == 0) ? 'Case Followup' : 'Opportunity Followup';
@@ -227,16 +242,25 @@ public with sharing class FL_TestDataFactories {
             return taskRecord;
         }
 
-        protected override FL_DataFactory.LookupsBuilders getDefaultLookupBuilders() {
-            return FL_DataFactory.lookupsBuilders()
-                    .fill(Task.WhatId).when(Task.Subject).equalTo('Case Followup').with(new CaseDataFactory())
-                    .fill(Task.WhatId).elseWith(new OpportunityDataFactory())
-                    .fill(Task.WhoId).alwaysWith(new ContactDataFactory2());
+        protected override void addLookups(FL_DataFactory.LookupContext lookupContext) {
+            Task taskRecord = (Task) lookupContext.record();
+
+
+            if (taskRecord.Subject == 'Case Followup') {
+                lookupContext.addMissingLookup(Task.WhatId, caseDataFactory);
+            } else {
+                lookupContext.addMissingLookup(Task.WhatId, opportunityDataFactory);
+            }
+
+
+            lookupContext.addMissingLookup(Task.WhoId, contactDataFactory);
+
         }
     }
 
     private class ContactDataFactory2 extends FL_DataFactory {
         private final ParentMode accountParentMode;
+        private final AccountDataFactory2 accountDataFactory = new AccountDataFactory2();
         public ContactDataFactory2() {
             this.accountParentMode = ParentMode.DIFFERENT_PARENT;
         }
@@ -254,9 +278,8 @@ public with sharing class FL_TestDataFactories {
             return contactRecord;
         }
 
-        protected override FL_DataFactory.LookupsBuilders getDefaultLookupBuilders() {
-            return FL_DataFactory.lookupsBuilders()
-                    .fill(Contact.AccountId).alwaysWith(new AccountDataFactory2(), accountParentMode);
+        protected override void addLookups(FL_DataFactory.LookupContext lookupContext) {
+            lookupContext.addMissingLookup(Contact.AccountId, accountDataFactory, accountParentMode);
         }
     }
 
@@ -277,3 +300,4 @@ public with sharing class FL_TestDataFactories {
     }
 
 }
+
