@@ -35,11 +35,11 @@ public inherited sharing abstract class FL_DataFactory {
 		return sObjectRecords;
 	}
 
-	public SObject createRecordWithoutSave() {
+	public SObject composeRecords() {
 		return composeRecords(1)[0];
 	}
 
-	public SObject createRecordWithoutSave(SObject overrideValuesForAll, Id recordTypeId) {
+	public SObject composeRecords(SObject overrideValuesForAll, Id recordTypeId) {
 		return composeRecords(1, overrideValuesForAll, null, recordTypeId)[0];
 	}
 
