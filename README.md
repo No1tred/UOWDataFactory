@@ -133,7 +133,7 @@ Source: `force-app/main/default/classes/FL_DataFactory.cls`
 
 ```apex
 public class AccountFactory extends FL_DataFactory {
-    protected override SObject getDefaultRecord(Integer index, Id recordTypeId) {
+    protected override SObject getDefaultRecord(Integer index) {
         Account a = new Account();
         a.Name = 'Account ' + index;
         return a;
@@ -141,11 +141,38 @@ public class AccountFactory extends FL_DataFactory {
 }
 ```
 
+### Required/optional hooks
+
+`FL_DataFactory` composition is driven by three methods:
+
+1. `getDefaultRecord(Integer index)` (required)
+- Define the base record shape for each composed row.
+- Keep this deterministic by index (for example naming, stage defaults, baseline flags).
+- Do not set cross-record lookups here unless they are fixed literals; relationship wiring belongs in `addLookups(...)`.
+
+2. `assignConditionally(SObject sObjectRecord)` (optional)
+- Define post-default conditional logic for the current record.
+- Use this for branches based on values already set (type, amount, marker fields, record-type-aware behavior).
+- This runs once per composed record before lookup relationships are added.
+
+3. `addLookups(FL_DataFactory.LookupContext lookupContext)` (optional)
+- Define relationship wiring for missing lookup fields.
+- Use `lookupContext.record()` to inspect the current record and add parent relations via:
+  - `addMissingLookup(...)` (required relation)
+  - `addMissingOptionalLookup(...)` (optional relation)
+  - `addMissingRequiredLookup(...)` (explicit required relation)
+- Prefer this hook for parent creation/reuse decisions (`ParentMode.SAME_PARENT` vs `ParentMode.DIFFERENT_PARENT`).
+
+Recommended split of responsibilities:
+- `getDefaultRecord`: baseline field defaults.
+- `assignConditionally`: data-driven branching on the current record.
+- `addLookups`: graph/relationship construction.
+
 ### Compose vs insert
 
 - `composeRecords(...)`: build records and graph only, no DML yet.
 - `insertRecords(...)` / `insertRecord(...)`: compose + perform DML immediately.
-- `createRecordWithoutSave(...)`: convenience alias for one composed record.
+- `composeNode(...)`: compose one record and return its `FL_SObjectNode` (with or without explicit context).
 
 ### Lookup hook API
 
@@ -194,8 +221,8 @@ You can also provide your own context:
 FL_UnitOfWork uow = new FL_UnitOfWork();
 FL_DataFactory.UowContext ctx = FL_DataFactory.newUowContext(uow);
 
-new TaskFactory().composeRecords(3, null, null, null, ctx);
-new CaseFactory().composeRecords(2, null, null, null, ctx);
+new TaskFactory().composeRecords(3, null, null, ctx);
+new CaseFactory().composeRecords(2, null, null, ctx);
 
 uow.performDMLs(FL_UnitOfWork.Mode.SINGLE_TYPE);
 ```
@@ -226,7 +253,7 @@ uow.performDMLs(FL_UnitOfWork.Mode.MULTI_TYPE);
 
 ```apex
 public class OpportunityFactory extends FL_DataFactory {
-    protected override SObject getDefaultRecord(Integer index, Id recordTypeId) {
+    protected override SObject getDefaultRecord(Integer index) {
         Opportunity o = new Opportunity();
         o.Name = 'Opp ' + index;
         o.StageName = 'Prospecting';
